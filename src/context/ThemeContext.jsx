@@ -1,5 +1,5 @@
 // src/context/ThemeContext.jsx
-import React, { createContext, useContext } from "react";
+import { createContext, useContext } from "react";
 import { ThemeProvider, Global, css } from "@emotion/react";
 
 const mindVaultTheme = {
