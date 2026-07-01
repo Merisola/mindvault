@@ -34,6 +34,8 @@ const TAXONOMY_MAP = {
   },
 };
 
+
+
 export default function BentoTimeline() {
   const dispatch = useDispatch();
   const { entries, isLoading } = useSelector((state) => state.vault);
