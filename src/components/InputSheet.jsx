@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { saveEntryRequest } from "@store/vaultSlice";
 import useAudioRecorder from "@hooks/useAudioRecorder";
+import useSpeechTranscript from "@hooks/useSpeechTranscript";
 import { generateTemporalMetadata } from "@utils/temporalEngine";
 
 const PIPELINES = [
@@ -48,10 +49,10 @@ export default function InputSheet() {
   const [textContent, setTextContent] = useState("");
   const textInputRef = useRef(null);
 
-  // Image Capture State Management
   const [imageDataUrl, setImageDataUrl] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Audio Capture Hook
   const {
     isRecording,
     formattedTime,
@@ -61,52 +62,96 @@ export default function InputSheet() {
     clearRecording,
   } = useAudioRecorder();
 
+  // Speech to Text Hook
+  const {
+    transcript,
+    isListening,
+    errorDebug,
+    startTranscription,
+    stopTranscription,
+    transcribeAudioBlob,
+    resetTranscript,
+    setTranscript,
+  } = useSpeechTranscript();
+
   useEffect(() => {
     if (isOpen && activePipeline === "text" && textInputRef.current) {
       setTimeout(() => textInputRef.current.focus(), 200);
     }
   }, [isOpen, activePipeline]);
 
-  // Unified closure reset logic
   useEffect(() => {
     if (!isOpen) {
-      stopRecording();
+      if (isRecording) stopRecording();
+      if (isListening) stopTranscription();
       clearRecording();
+      resetTranscript();
       setImageDataUrl(null);
       setTextContent("");
     }
   }, [isOpen]);
 
-  // Processes image payloads into local high-speed base64 strings
+  const handleStartAudioPipeline = () => {
+    startRecording();
+    startTranscription();
+  };
+
+  const handleStopAudioPipeline = () => {
+    stopRecording();
+    stopTranscription();
+
+    // We fetch the compiled binary from the window hook stream directly
+    setTimeout(async () => {
+      if (audioBlobUrl) {
+        try {
+          const response = await fetch(audioBlobUrl);
+          const blob = await response.blob();
+          await transcribeAudioBlob(blob);
+        } catch (e) {
+          console.error("Blob parsing error:", e);
+        }
+      }
+    }, 400);
+  };
+
+  const handleClearAudioPipeline = () => {
+    clearRecording();
+    resetTranscript();
+  };
+
+  // Inside src/components/InputSheet.jsx -> handleImageChange function
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setImageDataUrl(reader.result); // Base64 encoding stream string
+    reader.onloadend = async () => {
+      try {
+        // Scale down high-resolution smartphone photographs before writing to local disk
+        const lowResStream = await downsampleImage(reader.result, 800, 600);
+        setImageDataUrl(lowResStream);
+      } catch (err) {
+        console.error("Compression utility dropped frame:", err);
+        setImageDataUrl(reader.result); // Fallback to raw stream if canvas breaks
+      }
     };
     reader.readAsDataURL(file);
   };
-
-  // Inside src/components/InputSheet.jsx -> handleSubmit function
-
+  
   const handleSubmit = (e) => {
     e.preventDefault();
-
     if (activePipeline === "text" && !textContent.trim()) return;
     if (activePipeline === "audio" && !audioBlobUrl) return;
     if (activePipeline === "image" && !imageDataUrl) return;
 
     let finalContent = textContent.trim();
     if (activePipeline === "audio") {
-      finalContent = `🎙️ Voice Memo Clip [${formattedTime}] captured successfully.`;
+      finalContent = `🎙️ Voice Memo Clip [${formattedTime}]\n"${transcript || "No transcribed content captured."}"`;
     } else if (activePipeline === "image") {
       finalContent =
         finalContent || `📸 Photographic Snapshot captured securely.`;
     }
 
-    // Generate automated temporal footprint instantly using our new utility!
     const temporalMeta = generateTemporalMetadata(selectedCategory);
 
     const payload = {
@@ -123,9 +168,7 @@ export default function InputSheet() {
     };
 
     dispatch(saveEntryRequest(payload));
-
-    // Reset fields
-    clearRecording();
+    handleClearAudioPipeline();
     setImageDataUrl(null);
     setTextContent("");
     setIsOpen(false);
@@ -176,14 +219,14 @@ export default function InputSheet() {
           onSubmit={handleSubmit}
           className="px-6 pb-8 pt-2 flex flex-col gap-5"
         >
-          {/* Section 1: Pipeline Switcher Tabs */}
+          {/* Section 1: Tabs */}
           <div className="grid grid-cols-3 gap-1 bg-background p-1 rounded-xl border border-borderCustom">
             {PIPELINES.map((pipe) => (
               <button
                 key={pipe.id}
                 type="button"
                 onClick={() => {
-                  if (isRecording) stopRecording();
+                  if (isRecording) handleStopAudioPipeline();
                   setActivePipeline(pipe.id);
                 }}
                 className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all duration-200 ${activePipeline === pipe.id ? "bg-surface text-accentCustom shadow-md border border-borderCustom" : "text-textSecondary hover:text-textPrimary"}`}
@@ -194,8 +237,8 @@ export default function InputSheet() {
             ))}
           </div>
 
-          {/* Section 2: Dynamic Pipeline Input Area */}
-          <div className="min-h-[110px] bg-background/50 border border-borderCustom rounded-xl p-4 flex flex-col justify-center relative">
+          {/* Section 2: Dynamic Core Input Field Canvas */}
+          <div className="min-h-[120px] bg-background/50 border border-borderCustom rounded-xl p-4 flex flex-col justify-center relative">
             {activePipeline === "text" && (
               <textarea
                 ref={textInputRef}
@@ -214,11 +257,11 @@ export default function InputSheet() {
             {activePipeline === "audio" && (
               <div className="w-full flex flex-col items-center justify-center py-2 gap-3">
                 {!audioBlobUrl ? (
-                  <div className="flex flex-col items-center gap-2">
+                  <div className="flex flex-col items-center gap-2 w-full">
                     {isRecording ? (
                       <button
                         type="button"
-                        onClick={stopRecording}
+                        onClick={handleStopAudioPipeline}
                         className="w-12 h-12 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center border border-red-500/40 animate-pulse"
                       >
                         ⏹️
@@ -226,7 +269,7 @@ export default function InputSheet() {
                     ) : (
                       <button
                         type="button"
-                        onClick={startRecording}
+                        onClick={handleStartAudioPipeline}
                         className="w-12 h-12 rounded-full bg-accentCustom text-background flex items-center justify-center shadow-md shadow-accentCustom/10"
                       >
                         🎙️
@@ -236,9 +279,21 @@ export default function InputSheet() {
                       className={`text-xs font-mono font-semibold tracking-wider ${isRecording ? "text-red-400" : "text-textSecondary"}`}
                     >
                       {isRecording
-                        ? `RECORDING: ${formattedTime}`
-                        : "Tap mic to initialize hardware sequence"}
+                        ? `RECORDING & TRANSCRIBING: ${formattedTime}`
+                        : "Tap mic to initialize hardware voice sequence"}
                     </span>
+
+                    {/* LIVE STREAMING CONTAINER (Visible in your screenshot phase) */}
+                    {isRecording && transcript && (
+                      <div className="w-full mt-3 p-3 bg-background/90 border border-accentCustom/30 rounded-xl text-xs text-accentCustom italic text-center animate-pulse">
+                        "{transcript}"
+                      </div>
+                    )}
+                    {errorDebug && (
+                      <div className="text-[11px] text-red-400 mt-1">
+                        ⚠️ {errorDebug}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="w-full flex flex-col items-center gap-3">
@@ -247,9 +302,22 @@ export default function InputSheet() {
                       controls
                       className="w-full max-w-sm h-8 rounded"
                     />
+
+                    {/* POST-RECORDING REVIEW TEXTBOX */}
+                    <div className="w-full flex flex-col gap-1 px-2 text-left">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-textSecondary">
+                        Review Auto-Transcript
+                      </span>
+                      <textarea
+                        value={transcript}
+                        onChange={(e) => setTranscript(e.target.value)}
+                        className="w-full p-2.5 bg-background border border-borderCustom rounded-xl text-xs text-textPrimary leading-relaxed resize-none h-20 outline-none focus:border-accentCustom/40"
+                      />
+                    </div>
+
                     <button
                       type="button"
-                      onClick={clearRecording}
+                      onClick={handleClearAudioPipeline}
                       className="text-[10px] font-bold tracking-wider text-red-400 uppercase hover:underline"
                     >
                       Clear & Re-record
@@ -264,12 +332,11 @@ export default function InputSheet() {
                 <input
                   type="file"
                   accept="image/*"
-                  capture="environment" // Forces smartphone browsers to pop open the native camera lenses instantly!
+                  capture="environment"
                   ref={fileInputRef}
                   onChange={handleImageChange}
                   className="hidden"
                 />
-
                 {!imageDataUrl ? (
                   <button
                     type="button"
@@ -280,7 +347,7 @@ export default function InputSheet() {
                       📸
                     </span>
                     <span className="text-xs text-textSecondary font-semibold">
-                      Snap image or upload local layer snapshot
+                      Snap image or upload layer
                     </span>
                   </button>
                 ) : (
@@ -295,8 +362,8 @@ export default function InputSheet() {
                         type="text"
                         value={textContent}
                         onChange={(e) => setTextContent(e.target.value)}
-                        placeholder="Add caption or context..."
-                        className="bg-transparent border-b border-borderCustom text-xs text-textPrimary outline-none py-1 focus:border-accentCustom transition-colors"
+                        placeholder="Add caption..."
+                        className="bg-transparent border-b border-borderCustom text-xs text-textPrimary outline-none py-1 focus:border-accentCustom"
                       />
                       <button
                         type="button"
@@ -312,34 +379,31 @@ export default function InputSheet() {
             )}
           </div>
 
-          {/* Section 3: Category Metadata Selector */}
+          {/* Section 3: Categories */}
           <div className="flex flex-col gap-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-textSecondary">
               Assign Stream Node
             </span>
             <div className="flex flex-wrap gap-2">
-              {CATEGORIES.map((cat) => {
-                const isSelected = selectedCategory === cat.id;
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => setSelectedCategory(cat.id)}
-                    className={`px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 ${isSelected ? `${cat.color} ${cat.border} shadow-lg scale-105` : "border-borderCustom bg-background text-textSecondary hover:border-textSecondary/30"}`}
-                  >
-                    {cat.label}
-                  </button>
-                );
-              })}
+              {CATEGORIES.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setSelectedCategory(cat.id)}
+                  className={`px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 ${selectedCategory === cat.id ? `${cat.color} ${cat.border} shadow-lg scale-105` : "border-borderCustom bg-background text-textSecondary hover:border-textSecondary/30"}`}
+                >
+                  {cat.label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Section 4: Actions Bar */}
+          {/* Section 4: Actions */}
           <div className="flex items-center justify-end gap-3 pt-2 border-t border-borderCustom/60">
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="px-4 py-2 text-xs font-semibold text-textSecondary hover:text-textPrimary transition-colors"
+              className="px-4 py-2 text-xs font-semibold text-textSecondary hover:text-textPrimary"
             >
               Cancel
             </button>
@@ -350,7 +414,7 @@ export default function InputSheet() {
                 (activePipeline === "audio" && !audioBlobUrl) ||
                 (activePipeline === "image" && !imageDataUrl)
               }
-              className="bg-accentCustom hover:bg-accentCustom/90 text-background px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider shadow-md transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="bg-accentCustom hover:bg-accentCustom/90 text-background px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider shadow-md disabled:opacity-40"
             >
               Log Node
             </button>
