@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { saveEntryRequest } from "@store/vaultSlice";
-import useAudioRecorder from "@hooks/useAudioRecorder"; // Added!
+import useAudioRecorder from "@hooks/useAudioRecorder";
+import { generateTemporalMetadata } from "@utils/temporalEngine";
 
 const PIPELINES = [
   { id: "text", label: "Text Note", icon: "✍️" },
@@ -47,7 +48,10 @@ export default function InputSheet() {
   const [textContent, setTextContent] = useState("");
   const textInputRef = useRef(null);
 
-  // Initialize our shiny new native voice capture engine
+  // Image Capture State Management
+  const [imageDataUrl, setImageDataUrl] = useState(null);
+  const fileInputRef = useRef(null);
+
   const {
     isRecording,
     formattedTime,
@@ -63,43 +67,66 @@ export default function InputSheet() {
     }
   }, [isOpen, activePipeline]);
 
-  // Clean up recording if the user snaps the entire sheet shut abruptly
+  // Unified closure reset logic
   useEffect(() => {
     if (!isOpen) {
       stopRecording();
       clearRecording();
+      setImageDataUrl(null);
       setTextContent("");
     }
   }, [isOpen]);
 
+  // Processes image payloads into local high-speed base64 strings
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setImageDataUrl(reader.result); // Base64 encoding stream string
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Inside src/components/InputSheet.jsx -> handleSubmit function
+
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    // Validation guard depending on active layer type
     if (activePipeline === "text" && !textContent.trim()) return;
     if (activePipeline === "audio" && !audioBlobUrl) return;
+    if (activePipeline === "image" && !imageDataUrl) return;
 
-    const finalContent =
-      activePipeline === "audio"
-        ? `🎙️ Voice Memo Clip [${formattedTime}] captured successfully.`
-        : textContent.trim();
+    let finalContent = textContent.trim();
+    if (activePipeline === "audio") {
+      finalContent = `🎙️ Voice Memo Clip [${formattedTime}] captured successfully.`;
+    } else if (activePipeline === "image") {
+      finalContent =
+        finalContent || `📸 Photographic Snapshot captured securely.`;
+    }
+
+    // Generate automated temporal footprint instantly using our new utility!
+    const temporalMeta = generateTemporalMetadata(selectedCategory);
 
     const payload = {
       id: `mv_${Math.random().toString(36).substr(2, 9)}`,
-      auto_title: `${selectedCategory.toUpperCase()} Capture`,
+      auto_title: temporalMeta.autoTitle,
       category: selectedCategory,
-      day_period: new Date().getHours() < 12 ? "Morning" : "Afternoon",
-      year: 2026,
-      date_string: selectedDate || new Date().toISOString().split("T")[0],
+      day_period: temporalMeta.dayPeriod,
+      year: temporalMeta.year,
+      date_string: selectedDate || temporalMeta.dateString,
       text_content: finalContent,
       pipeline_type: activePipeline,
+      image_data: imageDataUrl,
       reminder_completed: false,
     };
 
     dispatch(saveEntryRequest(payload));
 
-    // Purge inputs and close tray
+    // Reset fields
     clearRecording();
+    setImageDataUrl(null);
     setTextContent("");
     setIsOpen(false);
   };
@@ -192,7 +219,7 @@ export default function InputSheet() {
                       <button
                         type="button"
                         onClick={stopRecording}
-                        className="w-12 h-12 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center border border-red-500/40 animate-pulse transition-all transform hover:scale-105"
+                        className="w-12 h-12 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center border border-red-500/40 animate-pulse"
                       >
                         ⏹️
                       </button>
@@ -200,7 +227,7 @@ export default function InputSheet() {
                       <button
                         type="button"
                         onClick={startRecording}
-                        className="w-12 h-12 rounded-full bg-accentCustom text-background flex items-center justify-center transition-all transform hover:scale-105 shadow-md shadow-accentCustom/10"
+                        className="w-12 h-12 rounded-full bg-accentCustom text-background flex items-center justify-center shadow-md shadow-accentCustom/10"
                       >
                         🎙️
                       </button>
@@ -215,7 +242,6 @@ export default function InputSheet() {
                   </div>
                 ) : (
                   <div className="w-full flex flex-col items-center gap-3">
-                    {/* Native player wrapper for recorded webm/mp3 blob */}
                     <audio
                       src={audioBlobUrl}
                       controls
@@ -234,11 +260,54 @@ export default function InputSheet() {
             )}
 
             {activePipeline === "image" && (
-              <div className="h-24 flex flex-col items-center justify-center gap-2 text-center border border-dashed border-borderCustom/60 rounded-lg bg-background/20">
-                <span className="text-2xl">📸</span>
-                <span className="text-xs text-textSecondary font-medium">
-                  Drag or drop media layer matrix
-                </span>
+              <div className="w-full flex flex-col items-center justify-center">
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment" // Forces smartphone browsers to pop open the native camera lenses instantly!
+                  ref={fileInputRef}
+                  onChange={handleImageChange}
+                  className="hidden"
+                />
+
+                {!imageDataUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current.click()}
+                    className="w-full h-24 flex flex-col items-center justify-center gap-2 text-center border border-dashed border-borderCustom/80 hover:border-accentCustom/50 rounded-lg bg-background/20 transition-colors group"
+                  >
+                    <span className="text-2xl group-hover:scale-110 transition-transform">
+                      📸
+                    </span>
+                    <span className="text-xs text-textSecondary font-semibold">
+                      Snap image or upload local layer snapshot
+                    </span>
+                  </button>
+                ) : (
+                  <div className="w-full flex items-center gap-4 bg-background/40 p-2 rounded-lg border border-borderCustom">
+                    <img
+                      src={imageDataUrl}
+                      alt="Capture preview"
+                      className="w-20 h-20 object-cover rounded-xl border border-borderCustom"
+                    />
+                    <div className="flex flex-col gap-1.5 flex-grow">
+                      <input
+                        type="text"
+                        value={textContent}
+                        onChange={(e) => setTextContent(e.target.value)}
+                        placeholder="Add caption or context..."
+                        className="bg-transparent border-b border-borderCustom text-xs text-textPrimary outline-none py-1 focus:border-accentCustom transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setImageDataUrl(null)}
+                        className="text-[10px] font-bold tracking-wider text-red-400 uppercase text-left hover:underline"
+                      >
+                        Remove Photo
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -256,7 +325,7 @@ export default function InputSheet() {
                     key={cat.id}
                     type="button"
                     onClick={() => setSelectedCategory(cat.id)}
-                    className={`px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 ${isSelected ? `${cat.color} ${cat.border} shadow-lg shadow-black/10 scale-105` : "border-borderCustom bg-background text-textSecondary hover:border-textSecondary/30"}`}
+                    className={`px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all duration-200 ${isSelected ? `${cat.color} ${cat.border} shadow-lg scale-105` : "border-borderCustom bg-background text-textSecondary hover:border-textSecondary/30"}`}
                   >
                     {cat.label}
                   </button>
@@ -278,7 +347,8 @@ export default function InputSheet() {
               type="submit"
               disabled={
                 (activePipeline === "text" && !textContent.trim()) ||
-                (activePipeline === "audio" && !audioBlobUrl)
+                (activePipeline === "audio" && !audioBlobUrl) ||
+                (activePipeline === "image" && !imageDataUrl)
               }
               className="bg-accentCustom hover:bg-accentCustom/90 text-background px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider shadow-md transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
             >
