@@ -3,6 +3,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import createSagaMiddleware from "redux-saga";
 import activeDayReducer from "./activeDaySlice";
 import vaultReducer from "./vaultSlice";
+import rootSaga from "./sagas"; // Import our brand new root watcher loop
 
 const sagaMiddleware = createSagaMiddleware();
 
@@ -13,10 +14,10 @@ export const store = configureStore({
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
-      thunk: false, // Disabling native thunks since we enforce strict Redux-Saga pipelines
-      serializableCheck: false, // Needed for local binary Blob pipeline stream items later
+      thunk: false,
+      serializableCheck: false,
     }).concat(sagaMiddleware),
 });
 
-// Export saga run trigger proxy for Milestone 6 hook-up
-export const runSaga = (rootSaga) => sagaMiddleware.run(rootSaga);
+// Fire up the continuous background watcher thread
+sagaMiddleware.run(rootSaga);

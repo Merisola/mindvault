@@ -24,6 +24,7 @@ export function* readEntriesFromDB() {
     );
     return entries || [];
   } catch (error) {
+    // eslint-disable-next-line preserve-caught-error
     throw new Error(`IndexedDB read failure: ${error.message}`);
   }
 }
