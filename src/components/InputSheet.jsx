@@ -1,5 +1,5 @@
 // src/components/InputSheet.jsx
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { saveEntryRequest } from "@store/vaultSlice";
 import useAudioRecorder from "@hooks/useAudioRecorder";
@@ -52,11 +52,12 @@ export default function InputSheet() {
   const [imageDataUrl, setImageDataUrl] = useState(null);
   const fileInputRef = useRef(null);
 
-  // Audio Capture Hook
+  // Audio Capture Hook - Pulling out raw audioBlob
   const {
     isRecording,
     formattedTime,
     audioBlobUrl,
+    audioBlob,
     startRecording,
     stopRecording,
     clearRecording,
@@ -74,12 +75,14 @@ export default function InputSheet() {
     setTranscript,
   } = useSpeechTranscript();
 
+  // Handle focus when switching to text
   useEffect(() => {
     if (isOpen && activePipeline === "text" && textInputRef.current) {
       setTimeout(() => textInputRef.current.focus(), 200);
     }
   }, [isOpen, activePipeline]);
 
+  // Clean layout context on unexpected close
   useEffect(() => {
     if (!isOpen) {
       if (isRecording) stopRecording();
@@ -92,6 +95,7 @@ export default function InputSheet() {
   }, [isOpen]);
 
   const handleStartAudioPipeline = () => {
+    handleClearAudioPipeline(); // Fresh state clean
     startRecording();
     startTranscription();
   };
@@ -100,18 +104,21 @@ export default function InputSheet() {
     stopRecording();
     stopTranscription();
 
-    // We fetch the compiled binary from the window hook stream directly
+    // Give the hardware encoder a 200ms frame window to finish flushing chunks
     setTimeout(async () => {
-      if (audioBlobUrl) {
+      if (audioBlob) {
+        await transcribeAudioBlob(audioBlob);
+      } else if (audioBlobUrl) {
+        // Fallback: If React state is batching slowly, grab the compiled data from the blob URL context
         try {
           const response = await fetch(audioBlobUrl);
-          const blob = await response.blob();
-          await transcribeAudioBlob(blob);
+          const freshBlob = await response.blob();
+          await transcribeAudioBlob(freshBlob);
         } catch (e) {
-          console.error("Blob parsing error:", e);
+          console.error("Failed to parse raw blob frame directly:", e);
         }
       }
-    }, 400);
+    }, 200);
   };
 
   const handleClearAudioPipeline = () => {
@@ -119,25 +126,14 @@ export default function InputSheet() {
     resetTranscript();
   };
 
-  // Inside src/components/InputSheet.jsx -> handleImageChange function
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        // Scale down high-resolution smartphone photographs before writing to local disk
-        const lowResStream = await downsampleImage(reader.result, 800, 600);
-        setImageDataUrl(lowResStream);
-      } catch (err) {
-        console.error("Compression utility dropped frame:", err);
-        setImageDataUrl(reader.result); // Fallback to raw stream if canvas breaks
-      }
-    };
+    reader.onloadend = () => setImageDataUrl(reader.result);
     reader.readAsDataURL(file);
   };
-  
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (activePipeline === "text" && !textContent.trim()) return;
@@ -219,7 +215,7 @@ export default function InputSheet() {
           onSubmit={handleSubmit}
           className="px-6 pb-8 pt-2 flex flex-col gap-5"
         >
-          {/* Section 1: Tabs */}
+          {/* Section 1: Navigation Tabs */}
           <div className="grid grid-cols-3 gap-1 bg-background p-1 rounded-xl border border-borderCustom">
             {PIPELINES.map((pipe) => (
               <button
@@ -237,7 +233,7 @@ export default function InputSheet() {
             ))}
           </div>
 
-          {/* Section 2: Dynamic Core Input Field Canvas */}
+          {/* Section 2: Dynamic Canvas Form Fields */}
           <div className="min-h-[120px] bg-background/50 border border-borderCustom rounded-xl p-4 flex flex-col justify-center relative">
             {activePipeline === "text" && (
               <textarea
@@ -283,14 +279,15 @@ export default function InputSheet() {
                         : "Tap mic to initialize hardware voice sequence"}
                     </span>
 
-                    {/* LIVE STREAMING CONTAINER (Visible in your screenshot phase) */}
-                    {isRecording && transcript && (
+                    {/* Active Processing Monitor Banner */}
+                    {transcript && (
                       <div className="w-full mt-3 p-3 bg-background/90 border border-accentCustom/30 rounded-xl text-xs text-accentCustom italic text-center animate-pulse">
                         "{transcript}"
                       </div>
                     )}
+
                     {errorDebug && (
-                      <div className="text-[11px] text-red-400 mt-1">
+                      <div className="w-full mt-2 p-2 bg-red-500/10 border border-red-500/20 text-red-400 text-[11px] rounded-lg text-center font-medium">
                         ⚠️ {errorDebug}
                       </div>
                     )}
@@ -303,7 +300,7 @@ export default function InputSheet() {
                       className="w-full max-w-sm h-8 rounded"
                     />
 
-                    {/* POST-RECORDING REVIEW TEXTBOX */}
+                    {/* Post-Processing Text Area Canvas Review Box */}
                     <div className="w-full flex flex-col gap-1 px-2 text-left">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-textSecondary">
                         Review Auto-Transcript
@@ -361,7 +358,7 @@ export default function InputSheet() {
                       <input
                         type="text"
                         value={textContent}
-                        onChange={(e) => setTextContent(e.target.value)}
+                        onChange={(e) => textContent(e.target.value)}
                         placeholder="Add caption..."
                         className="bg-transparent border-b border-borderCustom text-xs text-textPrimary outline-none py-1 focus:border-accentCustom"
                       />
@@ -379,7 +376,7 @@ export default function InputSheet() {
             )}
           </div>
 
-          {/* Section 3: Categories */}
+          {/* Section 3: Categories Taxonomy Selector */}
           <div className="flex flex-col gap-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-textSecondary">
               Assign Stream Node
@@ -398,7 +395,7 @@ export default function InputSheet() {
             </div>
           </div>
 
-          {/* Section 4: Actions */}
+          {/* Section 4: Operational Actions Execution Footer */}
           <div className="flex items-center justify-end gap-3 pt-2 border-t border-borderCustom/60">
             <button
               type="button"
@@ -414,7 +411,7 @@ export default function InputSheet() {
                 (activePipeline === "audio" && !audioBlobUrl) ||
                 (activePipeline === "image" && !imageDataUrl)
               }
-              className="bg-accentCustom hover:bg-accentCustom/90 text-background px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider shadow-md disabled:opacity-40"
+              className="bg-accentCustom hover:bg-accentCustom/90 text-background px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider shadow-md disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
             >
               Log Node
             </button>
